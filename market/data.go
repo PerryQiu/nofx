@@ -69,7 +69,7 @@ func Get(symbol string) (*Data, error) {
 	symbol = Normalize(symbol)
 
 	// 获取3分钟K线数据 (最近10个)
-	klines3m, err := getKlines(symbol, "3m", 40) // 多获取一些用于计算
+	klines3m, err := getKlines(symbol, "5m", 40) // 多获取一些用于计算
 	if err != nil {
 		return nil, fmt.Errorf("获取3分钟K线失败: %v", err)
 	}

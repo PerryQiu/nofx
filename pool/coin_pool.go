@@ -166,7 +166,7 @@ func fetchCoinPool() ([]CoinInfo, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("API返回错误 (status %d): %s", resp.StatusCode, string(body))
 	}
-
+	fmt.Printf("Coin Pool API响应: %s", string(body))
 	// 解析API响应
 	var response CoinPoolAPIResponse
 	if err := json.Unmarshal(body, &response); err != nil {

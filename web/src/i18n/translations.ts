@@ -11,8 +11,8 @@ export const translations = {
     stopped: 'STOPPED',
 
     // Footer
-    footerTitle: 'NOFX - AI Trading Competition System',
-    footerWarning: '⚠️ Trading involves risk. Use at your own discretion.',
+    footerTitle: 'AI Trading Competition System',
+    footerWarning: 'Spending money on learning seems more exciting.',
 
     // Stats Cards
     totalEquity: 'Total Equity',

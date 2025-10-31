@@ -50,7 +50,7 @@ type AutoTraderConfig struct {
 	CustomModelName string
 
 	// 扫描配置
-	ScanInterval time.Duration // 扫描间隔（建议3分钟）
+	ScanIntervalMinutes int // 扫描间隔分钟数（建议3分钟）
 
 	// 账户配置
 	InitialBalance float64 // 初始金额（用于计算盈亏，需手动设置）
@@ -58,6 +58,9 @@ type AutoTraderConfig struct {
 	// 杠杆配置
 	BTCETHLeverage  int // BTC和ETH的杠杆倍数
 	AltcoinLeverage int // 山寨币的杠杆倍数
+
+	// 风险控制配置
+	RiskControl decision.RiskControlConfig // 风险控制参数
 
 	// 风险控制（仅作为提示，AI可自主决定）
 	MaxDailyLoss    float64       // 最大日亏损百分比（提示）
@@ -185,10 +188,11 @@ func (at *AutoTrader) Run() error {
 	at.isRunning = true
 	log.Println("🚀 AI驱动自动交易系统启动")
 	log.Printf("💰 初始余额: %.2f USDT", at.initialBalance)
-	log.Printf("⚙️  扫描间隔: %v", at.config.ScanInterval)
+	log.Printf("⚙️  扫描间隔: %d分钟", at.config.ScanIntervalMinutes)
 	log.Println("🤖 AI将全权决定杠杆、仓位大小、止损止盈等参数")
 
-	ticker := time.NewTicker(at.config.ScanInterval)
+	scanInterval := time.Duration(at.config.ScanIntervalMinutes) * time.Minute
+	ticker := time.NewTicker(scanInterval)
 	defer ticker.Stop()
 
 	// 首次立即执行
@@ -521,11 +525,13 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 
 	// 6. 构建上下文
 	ctx := &decision.Context{
-		CurrentTime:     time.Now().Format("2006-01-02 15:04:05"),
-		RuntimeMinutes:  int(time.Since(at.startTime).Minutes()),
-		CallCount:       at.callCount,
-		BTCETHLeverage:  at.config.BTCETHLeverage,  // 使用配置的杠杆倍数
-		AltcoinLeverage: at.config.AltcoinLeverage, // 使用配置的杠杆倍数
+		CurrentTime:         time.Now().Format("2006-01-02 15:04:05"),
+		RuntimeMinutes:      int(time.Since(at.startTime).Minutes()),
+		CallCount:           at.callCount,
+		BTCETHLeverage:      at.config.BTCETHLeverage,      // 使用配置的杠杆倍数
+		AltcoinLeverage:     at.config.AltcoinLeverage,     // 使用配置的杠杆倍数
+		ScanIntervalMinutes: at.config.ScanIntervalMinutes, // 传递扫描间隔，用于动态调整参数
+		RiskControl:         at.config.RiskControl,         // 传递风险控制配置
 		Account: decision.AccountInfo{
 			TotalEquity:      totalEquity,
 			AvailableBalance: availableBalance,
@@ -748,19 +754,20 @@ func (at *AutoTrader) GetStatus() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"trader_id":       at.id,
-		"trader_name":     at.name,
-		"ai_model":        at.aiModel,
-		"exchange":        at.exchange,
-		"is_running":      at.isRunning,
-		"start_time":      at.startTime.Format(time.RFC3339),
-		"runtime_minutes": int(time.Since(at.startTime).Minutes()),
-		"call_count":      at.callCount,
-		"initial_balance": at.initialBalance,
-		"scan_interval":   at.config.ScanInterval.String(),
-		"stop_until":      at.stopUntil.Format(time.RFC3339),
-		"last_reset_time": at.lastResetTime.Format(time.RFC3339),
-		"ai_provider":     aiProvider,
+		"trader_id":             at.id,
+		"trader_name":           at.name,
+		"ai_model":              at.aiModel,
+		"exchange":              at.exchange,
+		"is_running":            at.isRunning,
+		"start_time":            at.startTime.Format(time.RFC3339),
+		"runtime_minutes":       int(time.Since(at.startTime).Minutes()),
+		"call_count":            at.callCount,
+		"initial_balance":       at.initialBalance,
+		"scan_interval_minutes": at.config.ScanIntervalMinutes,
+		"scan_interval":         fmt.Sprintf("%dm", at.config.ScanIntervalMinutes),
+		"stop_until":            at.stopUntil.Format(time.RFC3339),
+		"last_reset_time":       at.lastResetTime.Format(time.RFC3339),
+		"ai_provider":           aiProvider,
 	}
 }
 

@@ -8,7 +8,7 @@ nofx-auto
 *.exe
 nofx
 nofx_test
-
+./config.json
 # Go 相关
 *.test
 *.out

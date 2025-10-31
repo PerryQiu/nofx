@@ -64,6 +64,19 @@
     "btc_eth_leverage": 5,
     "altcoin_leverage": 5
   },
+  "risk": {
+    "min_risk_reward_ratio": 2.5,
+    "max_positions": 3,
+    "max_margin_used_pct": 80,
+    "min_confidence": 75,
+    "volatility_loss_pct": 5,
+    "volatility_profit_pct": 2,
+    "volatility_cooldown_min": 30,
+    "altcoin_position_size_min": 0.8,
+    "altcoin_position_size_max": 1.5,
+    "btc_eth_position_size_min": 5,
+    "btc_eth_position_size_max": 10
+  },
   "use_default_coins": true,
   "default_coins": [
     "BTCUSDT",
@@ -72,8 +85,7 @@
     "BNBUSDT",
     "XRPUSDT",
     "DOGEUSDT",
-    "ADAUSDT",
-    "HYPEUSDT"
+    "ADAUSDT"
   ],
   "coin_pool_api_url": "",
   "oi_top_api_url": "",

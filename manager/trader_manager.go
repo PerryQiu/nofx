@@ -23,7 +23,7 @@ func NewTraderManager() *TraderManager {
 }
 
 // AddTrader 添加一个trader
-func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig) error {
+func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, maxDailyLoss, maxDrawdown float64, stopTradingMinutes int, leverage config.LeverageConfig, risk config.RiskConfig) error {
 	tm.mu.Lock()
 	defer tm.mu.Unlock()
 
@@ -52,13 +52,26 @@ func (tm *TraderManager) AddTrader(cfg config.TraderConfig, coinPoolURL string, 
 		CustomAPIURL:          cfg.CustomAPIURL,
 		CustomAPIKey:          cfg.CustomAPIKey,
 		CustomModelName:       cfg.CustomModelName,
-		ScanInterval:          cfg.GetScanInterval(),
+		ScanIntervalMinutes:   cfg.ScanIntervalMinutes,
 		InitialBalance:        cfg.InitialBalance,
 		BTCETHLeverage:        leverage.BTCETHLeverage,  // 使用配置的杠杆倍数
 		AltcoinLeverage:       leverage.AltcoinLeverage, // 使用配置的杠杆倍数
-		MaxDailyLoss:          maxDailyLoss,
-		MaxDrawdown:           maxDrawdown,
-		StopTradingTime:       time.Duration(stopTradingMinutes) * time.Minute,
+		RiskControl: decision.RiskControlConfig{ // 传递风险控制配置
+			MinRiskRewardRatio:     risk.MinRiskRewardRatio,
+			MaxPositions:           risk.MaxPositions,
+			MaxMarginUsedPct:       risk.MaxMarginUsedPct,
+			MinConfidence:          risk.MinConfidence,
+			VolatilityLossPct:      risk.VolatilityLossPct,
+			VolatilityProfitPct:    risk.VolatilityProfitPct,
+			VolatilityCooldownMin:  risk.VolatilityCooldownMin,
+			AltcoinPositionSizeMin: risk.AltcoinPositionSizeMin,
+			AltcoinPositionSizeMax: risk.AltcoinPositionSizeMax,
+			BTCETHPositionSizeMin:  risk.BTCETHPositionSizeMin,
+			BTCETHPositionSizeMax:  risk.BTCETHPositionSizeMax,
+		},
+		MaxDailyLoss:    maxDailyLoss,
+		MaxDrawdown:     maxDrawdown,
+		StopTradingTime: time.Duration(stopTradingMinutes) * time.Minute,
 	}
 
 	// 创建trader实例

@@ -31,13 +31,14 @@ type OIData struct {
 	Average float64
 }
 
-// IntradayData 日内数据(3分钟间隔)
+// IntradayData 日内数据(短期间隔，由scan_interval_minutes决定)
 type IntradayData struct {
 	MidPrices   []float64
 	EMA20Values []float64
 	MACDValues  []float64
 	RSI7Values  []float64
 	RSI14Values []float64
+	Interval    string // K线间隔，如 "3m", "5m", "15m"
 }
 
 // LongerTermData 长期数据(4小时时间框架)
@@ -63,34 +64,43 @@ type Kline struct {
 	CloseTime int64
 }
 
-// Get 获取指定代币的市场数据
-func Get(symbol string) (*Data, error) {
+// GetWithInterval 获取指定代币的市场数据（根据扫描间隔动态调整）
+func GetWithInterval(symbol string, scanIntervalMinutes int) (*Data, error) {
 	// 标准化symbol
 	symbol = Normalize(symbol)
 
-	// 获取3分钟K线数据 (最近10个)
-	klines3m, err := getKlines(symbol, "5m", 40) // 多获取一些用于计算
+	// 根据扫描间隔选择合适的K线间隔
+	interval := selectInterval(scanIntervalMinutes)
+
+	// 计算需要获取的K线数量（确保覆盖足够的历史数据用于计算指标）
+	// 至少需要 26 根用于 MACD，再额外多获取一些
+	intradayLimit := calculateIntradayLimit(scanIntervalMinutes)
+
+	// 获取短期K线数据
+	klinesIntraday, err := getKlines(symbol, interval, intradayLimit)
 	if err != nil {
-		return nil, fmt.Errorf("获取3分钟K线失败: %v", err)
+		return nil, fmt.Errorf("获取%s K线失败: %v", interval, err)
 	}
 
-	// 获取4小时K线数据 (最近10个)
+	// 获取4小时K线数据 (用于长期趋势判断)
 	klines4h, err := getKlines(symbol, "4h", 60) // 多获取用于计算指标
 	if err != nil {
 		return nil, fmt.Errorf("获取4小时K线失败: %v", err)
 	}
 
-	// 计算当前指标 (基于3分钟最新数据)
-	currentPrice := klines3m[len(klines3m)-1].Close
-	currentEMA20 := calculateEMA(klines3m, 20)
-	currentMACD := calculateMACD(klines3m)
-	currentRSI7 := calculateRSI(klines3m, 7)
+	// 计算当前指标 (基于短期K线最新数据)
+	currentPrice := klinesIntraday[len(klinesIntraday)-1].Close
+	currentEMA20 := calculateEMA(klinesIntraday, 20)
+	currentMACD := calculateMACD(klinesIntraday)
+	currentRSI7 := calculateRSI(klinesIntraday, 7)
 
 	// 计算价格变化百分比
-	// 1小时价格变化 = 20个3分钟K线前的价格
+	// 1小时价格变化 = 动态计算需要回溯多少根K线
+	// 例如：3分钟K线需要回溯20根，5分钟需要回溯12根，15分钟需要回溯4根
+	barsFor1h := 60 / scanIntervalMinutes
 	priceChange1h := 0.0
-	if len(klines3m) >= 21 { // 至少需要21根K线 (当前 + 20根前)
-		price1hAgo := klines3m[len(klines3m)-21].Close
+	if len(klinesIntraday) >= barsFor1h+1 { // 至少需要 barsFor1h+1 根K线 (当前 + barsFor1h根前)
+		price1hAgo := klinesIntraday[len(klinesIntraday)-barsFor1h-1].Close
 		if price1hAgo > 0 {
 			priceChange1h = ((currentPrice - price1hAgo) / price1hAgo) * 100
 		}
@@ -116,7 +126,8 @@ func Get(symbol string) (*Data, error) {
 	fundingRate, _ := getFundingRate(symbol)
 
 	// 计算日内系列数据
-	intradayData := calculateIntradaySeries(klines3m)
+	intradayData := calculateIntradaySeries(klinesIntraday)
+	intradayData.Interval = interval // 记录使用的K线间隔
 
 	// 计算长期数据
 	longerTermData := calculateLongerTermData(klines4h)
@@ -134,6 +145,41 @@ func Get(symbol string) (*Data, error) {
 		IntradaySeries:    intradayData,
 		LongerTermContext: longerTermData,
 	}, nil
+}
+
+// Get 获取指定代币的市场数据（使用默认3分钟间隔，保持向后兼容）
+func Get(symbol string) (*Data, error) {
+	return GetWithInterval(symbol, 3)
+}
+
+// selectInterval 根据扫描间隔选择合适的K线间隔
+func selectInterval(scanIntervalMinutes int) string {
+	switch {
+	case scanIntervalMinutes <= 1:
+		return "1m"
+	case scanIntervalMinutes <= 3:
+		return "3m"
+	case scanIntervalMinutes <= 5:
+		return "5m"
+	case scanIntervalMinutes <= 15:
+		return "15m"
+	case scanIntervalMinutes <= 30:
+		return "30m"
+	default:
+		return "1h"
+	}
+}
+
+// calculateIntradayLimit 计算需要获取的K线数量
+// 确保至少覆盖足够的历史数据用于计算指标（至少需要26根用于MACD）
+func calculateIntradayLimit(scanIntervalMinutes int) int {
+	// 基本策略：获取足够多的K线，至少覆盖2-3小时的数据
+	// 同时确保至少40根K线用于计算指标
+	barsFor2Hours := 120 / scanIntervalMinutes
+	if barsFor2Hours < 40 {
+		return 40
+	}
+	return barsFor2Hours
 }
 
 // getKlines 从Binance获取K线数据
@@ -470,7 +516,11 @@ func Format(data *Data) string {
 	sb.WriteString(fmt.Sprintf("Funding Rate: %.2e\n\n", data.FundingRate))
 
 	if data.IntradaySeries != nil {
-		sb.WriteString("Intraday series (3‑minute intervals, oldest → latest):\n\n")
+		intervalDesc := data.IntradaySeries.Interval
+		if intervalDesc == "" {
+			intervalDesc = "3m" // 默认值，向后兼容
+		}
+		sb.WriteString(fmt.Sprintf("Intraday series (%s intervals, oldest → latest):\n\n", intervalDesc))
 
 		if len(data.IntradaySeries.MidPrices) > 0 {
 			sb.WriteString(fmt.Sprintf("Mid prices: %s\n\n", formatFloatSlice(data.IntradaySeries.MidPrices)))

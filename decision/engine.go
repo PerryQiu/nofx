@@ -53,19 +53,36 @@ type OITopData struct {
 	NetShort          float64 // 净空仓
 }
 
+// RiskControlConfig 风险控制配置（传递给决策引擎）
+type RiskControlConfig struct {
+	MinRiskRewardRatio     float64 // 最小风险回报比
+	MaxPositions           int     // 最多持仓数量
+	MaxMarginUsedPct       float64 // 最大保证金使用率%
+	MinConfidence          int     // 最小信心度
+	VolatilityLossPct      float64 // 波动追踪亏损阈值%
+	VolatilityProfitPct    float64 // 波动后止盈阈值%
+	VolatilityCooldownMin  int     // 波动后冷却时间（分钟）
+	AltcoinPositionSizeMin float64 // 山寨币最小仓位倍数
+	AltcoinPositionSizeMax float64 // 山寨币最大仓位倍数
+	BTCETHPositionSizeMin  float64 // BTC/ETH最小仓位倍数
+	BTCETHPositionSizeMax  float64 // BTC/ETH最大仓位倍数
+}
+
 // Context 交易上下文（传递给AI的完整信息）
 type Context struct {
-	CurrentTime     string                  `json:"current_time"`
-	RuntimeMinutes  int                     `json:"runtime_minutes"`
-	CallCount       int                     `json:"call_count"`
-	Account         AccountInfo             `json:"account"`
-	Positions       []PositionInfo          `json:"positions"`
-	CandidateCoins  []CandidateCoin         `json:"candidate_coins"`
-	MarketDataMap   map[string]*market.Data `json:"-"` // 不序列化，但内部使用
-	OITopDataMap    map[string]*OITopData   `json:"-"` // OI Top数据映射
-	Performance     interface{}             `json:"-"` // 历史表现分析（logger.PerformanceAnalysis）
-	BTCETHLeverage  int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
-	AltcoinLeverage int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
+	CurrentTime         string                  `json:"current_time"`
+	RuntimeMinutes      int                     `json:"runtime_minutes"`
+	CallCount           int                     `json:"call_count"`
+	Account             AccountInfo             `json:"account"`
+	Positions           []PositionInfo          `json:"positions"`
+	CandidateCoins      []CandidateCoin         `json:"candidate_coins"`
+	MarketDataMap       map[string]*market.Data `json:"-"` // 不序列化，但内部使用
+	OITopDataMap        map[string]*OITopData   `json:"-"` // OI Top数据映射
+	Performance         interface{}             `json:"-"` // 历史表现分析（logger.PerformanceAnalysis）
+	BTCETHLeverage      int                     `json:"-"` // BTC/ETH杠杆倍数（从配置读取）
+	AltcoinLeverage     int                     `json:"-"` // 山寨币杠杆倍数（从配置读取）
+	ScanIntervalMinutes int                     `json:"-"` // 扫描间隔分钟数（用于动态调整参数）
+	RiskControl         RiskControlConfig       `json:"-"` // 风险控制配置
 }
 
 // Decision AI的交易决策
@@ -97,7 +114,7 @@ func GetFullDecision(ctx *Context, mcpClient *mcp.Client) (*FullDecision, error)
 	}
 
 	// 2. 构建 System Prompt（固定规则）和 User Prompt（动态数据）
-	systemPrompt := buildSystemPrompt(ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage)
+	systemPrompt := buildSystemPrompt(ctx)
 	userPrompt := buildUserPrompt(ctx)
 
 	// 3. 调用AI API（使用 system + user prompt）
@@ -107,7 +124,7 @@ func GetFullDecision(ctx *Context, mcpClient *mcp.Client) (*FullDecision, error)
 	}
 
 	// 4. 解析AI响应
-	decision, err := parseFullDecisionResponse(aiResponse, ctx.Account.TotalEquity, ctx.BTCETHLeverage, ctx.AltcoinLeverage)
+	decision, err := parseFullDecisionResponse(aiResponse, ctx)
 	if err != nil {
 		return nil, fmt.Errorf("解析AI响应失败: %w", err)
 	}
@@ -146,14 +163,19 @@ func fetchMarketDataForContext(ctx *Context) error {
 		positionSymbols[pos.Symbol] = true
 	}
 
+	// 动态计算流动性过滤阈值：scan_interval_minutes * 5 (百万美元)
+	// 逻辑：扫描间隔越长，要求的流动性越高
+	// 例如：3分钟 -> 15M, 5分钟 -> 25M, 15分钟 -> 75M
+	volFilter := float64(ctx.ScanIntervalMinutes) * 5.0
+
 	for symbol := range symbolSet {
-		data, err := market.Get(symbol)
+		data, err := market.GetWithInterval(symbol, ctx.ScanIntervalMinutes)
 		if err != nil {
 			// 单个币种失败不影响整体，只记录错误
 			continue
 		}
 
-		// ⚠️ 流动性过滤：持仓价值低于15M USD的币种不做（多空都不做）
+		// ⚠️ 流动性过滤：持仓价值低于阈值的币种不做（多空都不做）
 		// 持仓价值 = 持仓量 × 当前价格
 		// 但现有持仓必须保留（需要决策是否平仓）
 		isExistingPosition := positionSymbols[symbol]
@@ -161,9 +183,9 @@ func fetchMarketDataForContext(ctx *Context) error {
 			// 计算持仓价值（USD）= 持仓量 × 当前价格
 			oiValue := data.OpenInterest.Latest * data.CurrentPrice
 			oiValueInMillions := oiValue / 1_000_000 // 转换为百万美元单位
-			if oiValueInMillions < 15 {
-				log.Printf("⚠️  %s 持仓价值过低(%.2fM USD < 15M)，跳过此币种 [持仓量:%.0f × 价格:%.4f]",
-					symbol, oiValueInMillions, data.OpenInterest.Latest, data.CurrentPrice)
+			if oiValueInMillions < volFilter {
+				log.Printf("⚠️  %s 持仓价值过低(%.2fM USD < %.0fM)，跳过此币种 [持仓量:%.0f × 价格:%.4f]",
+					symbol, oiValueInMillions, volFilter, data.OpenInterest.Latest, data.CurrentPrice)
 				continue
 			}
 		}
@@ -199,9 +221,15 @@ func calculateMaxCandidates(ctx *Context) int {
 	return len(ctx.CandidateCoins)
 }
 
-// buildSystemPrompt 构建 System Prompt（固定规则，可缓存）
-func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage int) string {
+// buildSystemPrompt 构建 System Prompt（使用配置参数）
+func buildSystemPrompt(ctx *Context) string {
 	var sb strings.Builder
+
+	rc := ctx.RiskControl
+	accountEquity := ctx.Account.TotalEquity
+	btcEthLeverage := ctx.BTCETHLeverage
+	altcoinLeverage := ctx.AltcoinLeverage
+	scanInterval := ctx.ScanIntervalMinutes
 
 	// === 核心使命 ===
 	sb.WriteString("你是专业的加密货币交易AI，在币安合约市场进行自主交易。\n\n")
@@ -215,17 +243,18 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("- ❌ 频繁交易、小盈小亏 → 增加波动，严重降低夏普\n")
 	sb.WriteString("- ❌ 过度交易、手续费损耗 → 直接亏损\n")
 	sb.WriteString("- ❌ 过早平仓、频繁进出 → 错失大行情\n\n")
-	sb.WriteString("**关键认知**: 系统每5分钟扫描一次，但不意味着每次都要交易！\n")
+	sb.WriteString(fmt.Sprintf("**关键认知**: 系统每%d分钟扫描一次，但不意味着每次都要交易！\n", scanInterval))
 	sb.WriteString("大多数时候应该是 `wait` 或 `hold`，只在极佳机会时才开仓。\n\n")
 
 	// === 硬约束（风险控制）===
 	sb.WriteString("# ⚖️ 硬约束（风险控制）\n\n")
-	sb.WriteString("前提：当前可用资金（accountEquity）固定为 **200 USDT**。\n\n")
-	sb.WriteString("1. **风险回报比**: 必须 ≥ 1:2.5（冒1%风险，赚2.5%+收益）\n")
-	sb.WriteString("2. **最多持仓**: 3个币种（质量>数量）\n")
+	sb.WriteString(fmt.Sprintf("前提：当前账户净值为 **%.2f USDT**。\n\n", accountEquity))
+	sb.WriteString(fmt.Sprintf("1. **风险回报比**: 必须 ≥ 1:%.1f（冒1%%风险，赚%.1f%%+收益）\n", rc.MinRiskRewardRatio, rc.MinRiskRewardRatio))
+	sb.WriteString(fmt.Sprintf("2. **最多持仓**: %d个币种（质量>数量）\n", rc.MaxPositions))
 	sb.WriteString(fmt.Sprintf("3. **单币仓位**: 山寨%.0f-%.0f U(%dx杠杆) | BTC/ETH %.0f-%.0f U(%dx杠杆)\n",
-		accountEquity*0.8, accountEquity*1.5, altcoinLeverage, accountEquity*5, accountEquity*10, btcEthLeverage))
-	sb.WriteString("4. **保证金**: 总使用率 ≤ 80%\n\n")
+		accountEquity*rc.AltcoinPositionSizeMin, accountEquity*rc.AltcoinPositionSizeMax, altcoinLeverage,
+		accountEquity*rc.BTCETHPositionSizeMin, accountEquity*rc.BTCETHPositionSizeMax, btcEthLeverage))
+	sb.WriteString(fmt.Sprintf("4. **保证金**: 总使用率 ≤ %.0f%%\n\n", rc.MaxMarginUsedPct))
 
 	// === 做空激励 ===
 	sb.WriteString("# 📉 做多做空平衡\n\n")
@@ -249,7 +278,11 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("# 🎯 开仓标准（严格）\n\n")
 	sb.WriteString("只在**强信号**时开仓，不确定就观望。\n\n")
 	sb.WriteString("**你拥有的完整数据**：\n")
-	sb.WriteString("- 📊 **原始序列**：3分钟价格序列(MidPrices数组) + 4小时K线序列\n")
+	klineInterval := fmt.Sprintf("%d分钟", scanInterval)
+	if scanInterval >= 60 {
+		klineInterval = fmt.Sprintf("%d小时", scanInterval/60)
+	}
+	sb.WriteString(fmt.Sprintf("- 📊 **原始序列**：%s价格序列(MidPrices数组) + 4小时K线序列\n", klineInterval))
 	sb.WriteString("- 📈 **技术序列**：EMA20序列、MACD序列、RSI7序列、RSI14序列\n")
 	sb.WriteString("- 💰 **资金序列**：成交量序列、持仓量(OI)序列、资金费率\n")
 	sb.WriteString("- 🎯 **筛选标记**：AI500评分 / OI_Top排名（如果有标注）\n\n")
@@ -257,12 +290,12 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("- 自由运用序列数据，你可以做但不限于趋势分析、形态识别、支撑阻力、技术阻力位、斐波那契、波动带计算\n")
 	sb.WriteString("- 多维度交叉验证（价格+量+OI+指标+序列形态）\n")
 	sb.WriteString("- 用你认为最有效的方法发现高确定性机会\n")
-	sb.WriteString("- 综合信心度 ≥ 75 才开仓\n\n")
+	sb.WriteString(fmt.Sprintf("- 综合信心度 ≥ %d 才开仓\n\n", rc.MinConfidence))
 	sb.WriteString("**避免低质量信号**：\n")
 	sb.WriteString("- 单一维度（只看一个指标）\n")
 	sb.WriteString("- 相互矛盾（涨但量萎缩）\n")
 	sb.WriteString("- 横盘震荡\n")
-	sb.WriteString("- 刚平仓不久（<15分钟）\n\n")
+	sb.WriteString(fmt.Sprintf("- 刚平仓不久（<%d分钟）\n\n", rc.VolatilityCooldownMin/2))
 
 	// === 夏普比率自我进化 ===
 	sb.WriteString("# 🧬 夏普比率自我进化\n\n")
@@ -283,6 +316,28 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("**夏普比率 > 0.7** (优异表现):\n")
 	sb.WriteString("  → 🚀 可适度扩大仓位\n\n")
 	sb.WriteString("**关键**: 夏普比率是唯一指标，它会自然惩罚频繁交易和过度进出。\n\n")
+
+	// === 波动止盈机制 ===
+	sb.WriteString("# 🎢 波动止盈机制（重要！）\n\n")
+	sb.WriteString("**目的**: 识别大幅波动后的疲惫信号，锁定来之不易的利润\n\n")
+	sb.WriteString("**触发条件**（按顺序检测）：\n")
+	sb.WriteString(fmt.Sprintf("1. 持仓经历过盈亏%-%.0f%% 的波动（从最高点到最低点）\n", rc.VolatilityLossPct))
+	sb.WriteString("2. 之后回到盈利状态\n")
+	sb.WriteString(fmt.Sprintf("3. 再次下跌%-%.0f%%或更多\n", rc.VolatilityLossPct))
+	sb.WriteString("4. 然后再次回升到盈利状态\n")
+	sb.WriteString(fmt.Sprintf("5. **当前盈利达到+%.0f%%或更高时**\n\n", rc.VolatilityProfitPct))
+	sb.WriteString("**执行动作**：\n")
+	sb.WriteString("- ⚡ 立即平仓止盈（不管其他指标如何）\n")
+	sb.WriteString(fmt.Sprintf("- 🚫 该币种进入%d分钟冷却期，期间禁止交易\n", rc.VolatilityCooldownMin))
+	sb.WriteString("- 💡 理由：经历两次大波动后，币种容易进入震荡或下跌，此时小盈利是最好的退出时机\n\n")
+	sb.WriteString("**示例场景**：\n")
+	sb.WriteString(fmt.Sprintf("- T0: 开仓做多 BTCUSDT，入场价 $100k\n"))
+	sb.WriteString(fmt.Sprintf("- T1: 涨到 $105k (+5%%)，然后暴跌到 $99.5k (-%%.5%%, 触发第一次-%%.0f%%)\n", rc.VolatilityLossPct))
+	sb.WriteString("- T2: 反弹到 $100.5k (+0.5%%盈利，回到盈利)\n")
+	sb.WriteString(fmt.Sprintf("- T3: 再次下跌到 $99k (-1%%, 触发第二次-%%.0f%%)\n", rc.VolatilityLossPct))
+	sb.WriteString(fmt.Sprintf("- T4: 反弹到 $102k (+2%%盈利) → **触发波动止盈！立即平仓**\n"))
+	sb.WriteString(fmt.Sprintf("- T5~T%d: BTCUSDT 冷却期，不交易\n\n", 5+rc.VolatilityCooldownMin/scanInterval))
+	sb.WriteString("**User Prompt中会明确标注**哪些币种触发了此机制，请严格执行！\n\n")
 
 	// === 决策流程 ===
 	sb.WriteString("# 📋 决策流程\n\n")
@@ -311,7 +366,7 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("- 目标是夏普比率，不是交易频率\n")
 	sb.WriteString("- 做空 = 做多，都是赚钱工具\n")
 	sb.WriteString("- 宁可错过，不做低质量交易\n")
-	sb.WriteString("- 风险回报比1:2.5是底线\n")
+	sb.WriteString("- 风险回报比1:3是底线\n")
 
 	return sb.String()
 }
@@ -418,7 +473,7 @@ func buildUserPrompt(ctx *Context) string {
 }
 
 // parseFullDecisionResponse 解析AI的完整决策响应
-func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthLeverage, altcoinLeverage int) (*FullDecision, error) {
+func parseFullDecisionResponse(aiResponse string, ctx *Context) (*FullDecision, error) {
 	// 1. 提取思维链
 	cotTrace := extractCoTTrace(aiResponse)
 
@@ -432,7 +487,7 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, btcEthL
 	}
 
 	// 3. 验证决策
-	if err := validateDecisions(decisions, accountEquity, btcEthLeverage, altcoinLeverage); err != nil {
+	if err := validateDecisions(decisions, ctx); err != nil {
 		return &FullDecision{
 			CoTTrace:  cotTrace,
 			Decisions: decisions,
@@ -499,10 +554,10 @@ func fixMissingQuotes(jsonStr string) string {
 	return jsonStr
 }
 
-// validateDecisions 验证所有决策（需要账户信息和杠杆配置）
-func validateDecisions(decisions []Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int) error {
+// validateDecisions 验证所有决策（需要账户信息和风控配置）
+func validateDecisions(decisions []Decision, ctx *Context) error {
 	for i, decision := range decisions {
-		if err := validateDecision(&decision, accountEquity, btcEthLeverage, altcoinLeverage); err != nil {
+		if err := validateDecision(&decision, ctx); err != nil {
 			return fmt.Errorf("决策 #%d 验证失败: %w", i+1, err)
 		}
 	}
@@ -532,7 +587,12 @@ func findMatchingBracket(s string, start int) int {
 }
 
 // validateDecision 验证单个决策的有效性
-func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoinLeverage int) error {
+func validateDecision(d *Decision, ctx *Context) error {
+	rc := ctx.RiskControl
+	accountEquity := ctx.Account.TotalEquity
+	btcEthLeverage := ctx.BTCETHLeverage
+	altcoinLeverage := ctx.AltcoinLeverage
+
 	// 验证action
 	validActions := map[string]bool{
 		"open_long":   true,
@@ -549,12 +609,12 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 
 	// 开仓操作必须提供完整参数
 	if d.Action == "open_long" || d.Action == "open_short" {
-		// 根据币种使用配置的杠杆上限
-		maxLeverage := altcoinLeverage          // 山寨币使用配置的杠杆
-		maxPositionValue := accountEquity * 1.5 // 山寨币最多1.5倍账户净值
+		// 根据币种使用配置的杠杆上限和仓位限制
+		maxLeverage := altcoinLeverage                                // 山寨币使用配置的杠杆
+		maxPositionValue := accountEquity * rc.AltcoinPositionSizeMax // 山寨币最大仓位
 		if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
-			maxLeverage = btcEthLeverage          // BTC和ETH使用配置的杠杆
-			maxPositionValue = accountEquity * 10 // BTC/ETH最多10倍账户净值
+			maxLeverage = btcEthLeverage                                // BTC和ETH使用配置的杠杆
+			maxPositionValue = accountEquity * rc.BTCETHPositionSizeMax // BTC/ETH最大仓位
 		}
 
 		if d.Leverage <= 0 || d.Leverage > maxLeverage {
@@ -567,9 +627,9 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 		tolerance := maxPositionValue * 0.01 // 1%容差
 		if d.PositionSizeUSD > maxPositionValue+tolerance {
 			if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
-				return fmt.Errorf("BTC/ETH单币种仓位价值不能超过%.0f USDT（10倍账户净值），实际: %.0f", maxPositionValue, d.PositionSizeUSD)
+				return fmt.Errorf("BTC/ETH单币种仓位价值不能超过%.0f USDT（%.1f倍账户净值），实际: %.0f", maxPositionValue, rc.BTCETHPositionSizeMax, d.PositionSizeUSD)
 			} else {
-				return fmt.Errorf("山寨币单币种仓位价值不能超过%.0f USDT（1.5倍账户净值），实际: %.0f", maxPositionValue, d.PositionSizeUSD)
+				return fmt.Errorf("山寨币单币种仓位价值不能超过%.0f USDT（%.1f倍账户净值），实际: %.0f", maxPositionValue, rc.AltcoinPositionSizeMax, d.PositionSizeUSD)
 			}
 		}
 		if d.StopLoss <= 0 || d.TakeProfit <= 0 {
@@ -587,7 +647,7 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 			}
 		}
 
-		// 验证风险回报比（必须≥1:2.5）
+		// 验证风险回报比（必须≥1:3）
 		// 计算入场价（假设当前市价）
 		var entryPrice float64
 		if d.Action == "open_long" {
@@ -613,10 +673,10 @@ func validateDecision(d *Decision, accountEquity float64, btcEthLeverage, altcoi
 			}
 		}
 
-		// 硬约束：风险回报比必须≥2.5
-		if riskRewardRatio < 2.5 {
-			return fmt.Errorf("风险回报比过低(%.2f:1)，必须≥2.5:1 [风险:%.2f%% 收益:%.2f%%] [止损:%.2f 止盈:%.2f]",
-				riskRewardRatio, riskPercent, rewardPercent, d.StopLoss, d.TakeProfit)
+		// 硬约束：风险回报比必须≥配置值
+		if riskRewardRatio < rc.MinRiskRewardRatio {
+			return fmt.Errorf("风险回报比过低(%.2f:1)，必须≥%.1f:1 [风险:%.2f%% 收益:%.2f%%] [止损:%.2f 止盈:%.2f]",
+				riskRewardRatio, rc.MinRiskRewardRatio, riskPercent, rewardPercent, d.StopLoss, d.TakeProfit)
 		}
 	}
 

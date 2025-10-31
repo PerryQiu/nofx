@@ -11,7 +11,7 @@ import (
 type TraderConfig struct {
 	ID      string `json:"id"`
 	Name    string `json:"name"`
-	Enabled bool   `json:"enabled"` // 是否启用该trader
+	Enabled bool   `json:"enabled"`  // 是否启用该trader
 	AIModel string `json:"ai_model"` // "qwen" or "deepseek"
 
 	// 交易平台选择（二选一）
@@ -50,6 +50,21 @@ type LeverageConfig struct {
 	AltcoinLeverage int `json:"altcoin_leverage"` // 山寨币的杠杆倍数（主账户建议5-20，子账户≤5）
 }
 
+// RiskConfig 风险控制配置
+type RiskConfig struct {
+	MinRiskRewardRatio     float64 `json:"min_risk_reward_ratio"`     // 最小风险回报比（默认2.5）
+	MaxPositions           int     `json:"max_positions"`             // 最多持仓数量（默认3）
+	MaxMarginUsedPct       float64 `json:"max_margin_used_pct"`       // 最大保证金使用率%（默认80）
+	MinConfidence          int     `json:"min_confidence"`            // 最小信心度（默认75）
+	VolatilityLossPct      float64 `json:"volatility_loss_pct"`       // 波动追踪亏损阈值%（默认5）
+	VolatilityProfitPct    float64 `json:"volatility_profit_pct"`     // 波动后止盈阈值%（默认2）
+	VolatilityCooldownMin  int     `json:"volatility_cooldown_min"`   // 波动后冷却时间（分钟，默认30）
+	AltcoinPositionSizeMin float64 `json:"altcoin_position_size_min"` // 山寨币最小仓位倍数（默认0.8）
+	AltcoinPositionSizeMax float64 `json:"altcoin_position_size_max"` // 山寨币最大仓位倍数（默认1.5）
+	BTCETHPositionSizeMin  float64 `json:"btc_eth_position_size_min"` // BTC/ETH最小仓位倍数（默认5）
+	BTCETHPositionSizeMax  float64 `json:"btc_eth_position_size_max"` // BTC/ETH最大仓位倍数（默认10）
+}
+
 // Config 总配置
 type Config struct {
 	Traders            []TraderConfig `json:"traders"`
@@ -62,6 +77,7 @@ type Config struct {
 	MaxDrawdown        float64        `json:"max_drawdown"`
 	StopTradingMinutes int            `json:"stop_trading_minutes"`
 	Leverage           LeverageConfig `json:"leverage"` // 杠杆配置
+	Risk               RiskConfig     `json:"risk"`     // 风险控制配置
 }
 
 // LoadConfig 从文件加载配置
@@ -80,7 +96,7 @@ func LoadConfig(filename string) (*Config, error) {
 	if !config.UseDefaultCoins && config.CoinPoolAPIURL == "" {
 		config.UseDefaultCoins = true
 	}
-
+	fmt.Printf("✓ 配置加载使用Coins为UseDefaultCoins：[%s]", config.UseDefaultCoins)
 	// 设置默认币种池
 	if len(config.DefaultCoins) == 0 {
 		config.DefaultCoins = []string{
@@ -190,6 +206,41 @@ func (c *Config) Validate() error {
 	}
 	if c.Leverage.AltcoinLeverage > 5 {
 		fmt.Printf("⚠️  警告: 山寨币杠杆设置为%dx，如果使用子账户可能会失败（子账户限制≤5x）\n", c.Leverage.AltcoinLeverage)
+	}
+
+	// 设置风险控制默认值
+	if c.Risk.MinRiskRewardRatio <= 0 {
+		c.Risk.MinRiskRewardRatio = 2.5 // 默认风险回报比 1:2.5
+	}
+	if c.Risk.MaxPositions <= 0 {
+		c.Risk.MaxPositions = 3 // 默认最多3个持仓
+	}
+	if c.Risk.MaxMarginUsedPct <= 0 {
+		c.Risk.MaxMarginUsedPct = 80 // 默认最大保证金使用率80%
+	}
+	if c.Risk.MinConfidence <= 0 {
+		c.Risk.MinConfidence = 75 // 默认最小信心度75
+	}
+	if c.Risk.VolatilityLossPct <= 0 {
+		c.Risk.VolatilityLossPct = 5 // 默认波动追踪亏损阈值5%
+	}
+	if c.Risk.VolatilityProfitPct <= 0 {
+		c.Risk.VolatilityProfitPct = 2 // 默认波动后止盈阈值2%
+	}
+	if c.Risk.VolatilityCooldownMin <= 0 {
+		c.Risk.VolatilityCooldownMin = 30 // 默认冷却时间30分钟
+	}
+	if c.Risk.AltcoinPositionSizeMin <= 0 {
+		c.Risk.AltcoinPositionSizeMin = 0.8 // 默认山寨币最小仓位0.8倍账户净值
+	}
+	if c.Risk.AltcoinPositionSizeMax <= 0 {
+		c.Risk.AltcoinPositionSizeMax = 1.5 // 默认山寨币最大仓位1.5倍账户净值
+	}
+	if c.Risk.BTCETHPositionSizeMin <= 0 {
+		c.Risk.BTCETHPositionSizeMin = 5 // 默认BTC/ETH最小仓位5倍账户净值
+	}
+	if c.Risk.BTCETHPositionSizeMax <= 0 {
+		c.Risk.BTCETHPositionSizeMax = 10 // 默认BTC/ETH最大仓位10倍账户净值
 	}
 
 	return nil

@@ -220,11 +220,12 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 
 	// === 硬约束（风险控制）===
 	sb.WriteString("# ⚖️ 硬约束（风险控制）\n\n")
+	sb.WriteString("前提：当前可用资金（accountEquity）固定为 **200 USDT**。\n\n")
 	sb.WriteString("1. **风险回报比**: 必须 ≥ 1:3（冒1%风险，赚3%+收益）\n")
 	sb.WriteString("2. **最多持仓**: 3个币种（质量>数量）\n")
 	sb.WriteString(fmt.Sprintf("3. **单币仓位**: 山寨%.0f-%.0f U(%dx杠杆) | BTC/ETH %.0f-%.0f U(%dx杠杆)\n",
 		accountEquity*0.8, accountEquity*1.5, altcoinLeverage, accountEquity*5, accountEquity*10, btcEthLeverage))
-	sb.WriteString("4. **保证金**: 总使用率 ≤ 90%\n\n")
+	sb.WriteString("4. **保证金**: 总使用率 ≤ 80%\n\n")
 
 	// === 做空激励 ===
 	sb.WriteString("# 📉 做多做空平衡\n\n")
@@ -276,7 +277,7 @@ func buildSystemPrompt(accountEquity float64, btcEthLeverage, altcoinLeverage in
 	sb.WriteString("**夏普比率 -0.5 ~ 0** (轻微亏损):\n")
 	sb.WriteString("  → ⚠️ 严格控制：只做信心度>80的交易\n")
 	sb.WriteString("  → 减少交易频率：每小时最多1笔新开仓\n")
-	sb.WriteString("  → 耐心持仓：至少持有30分钟以上\n\n")
+	sb.WriteString("  → 耐心持仓：至少持有20分钟以上\n\n")
 	sb.WriteString("**夏普比率 0 ~ 0.7** (正收益):\n")
 	sb.WriteString("  → ✅ 维持当前策略\n\n")
 	sb.WriteString("**夏普比率 > 0.7** (优异表现):\n")

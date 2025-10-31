@@ -165,8 +165,8 @@ func fetchMarketDataForContext(ctx *Context) error {
 
 	// 动态计算流动性过滤阈值：scan_interval_minutes * 5 (百万美元)
 	// 逻辑：扫描间隔越长，要求的流动性越高
-	// 例如：3分钟 -> 15M, 5分钟 -> 25M, 15分钟 -> 75M
-	volFilter := float64(ctx.ScanIntervalMinutes) * 5.0
+	// 例如：3分钟 -> 10M, 5分钟 -> 25M, 15分钟 -> 75M
+	volFilter := float64(ctx.ScanIntervalMinutes) * 3.5
 
 	for symbol := range symbolSet {
 		data, err := market.GetWithInterval(symbol, ctx.ScanIntervalMinutes)
@@ -256,13 +256,22 @@ func buildSystemPrompt(ctx *Context) string {
 		accountEquity*rc.BTCETHPositionSizeMin, accountEquity*rc.BTCETHPositionSizeMax, btcEthLeverage))
 	sb.WriteString(fmt.Sprintf("4. **保证金**: 总使用率 ≤ %.0f%%\n\n", rc.MaxMarginUsedPct))
 
-	// === 做空激励 ===
-	sb.WriteString("# 📉 做多做空平衡\n\n")
-	sb.WriteString("**重要**: 下跌趋势做空的利润 = 上涨趋势做多的利润\n\n")
-	sb.WriteString("- 上涨趋势 → 做多\n")
-	sb.WriteString("- 下跌趋势 → 做空\n")
-	sb.WriteString("- 震荡市场 → 观望\n\n")
-	sb.WriteString("**不要有做多偏见！做空是你的核心工具之一**\n\n")
+	// === 多空策略 ===
+	sb.WriteString("# 📊 做多做空策略（技术指标导向）\n\n")
+	sb.WriteString("**核心原则**: 根据技术指标和市场信号客观判断方向，不要有方向偏见\n\n")
+	sb.WriteString("**判断方法**（基于你拥有的完整市场数据）：\n")
+	sb.WriteString("- 📈 **上涨信号** → 做多\n")
+	sb.WriteString("  • EMA20上穿、MACD金叉、RSI从超卖反弹\n")
+	sb.WriteString("  • 价格突破阻力位、成交量放大、持仓量增加（多头主导）\n")
+	sb.WriteString("  • 4小时级别趋势向上、价格高于EMA20/50\n\n")
+	sb.WriteString("- 📉 **下跌信号** → 做空\n")
+	sb.WriteString("  • EMA20下穿、MACD死叉、RSI从超买回落\n")
+	sb.WriteString("  • 价格跌破支撑位、成交量放大、持仓量增加（空头主导）\n")
+	sb.WriteString("  • 4小时级别趋势向下、价格低于EMA20/50\n\n")
+	sb.WriteString("- ⏸️ **震荡信号** → 观望\n")
+	sb.WriteString("  • 技术指标相互矛盾、横盘整理、成交量萎缩\n")
+	sb.WriteString("  • 无明显趋势、支撑阻力频繁测试但未突破\n\n")
+	sb.WriteString("**关键**: 方向选择完全基于技术分析，不要因为习惯或偏见而偏向某个方向。上涨做多，下跌做空，这是盈利的根本。\n\n")
 
 	// === 交易频率认知 ===
 	sb.WriteString("# ⏱️ 交易频率认知\n\n")
@@ -306,16 +315,18 @@ func buildSystemPrompt(ctx *Context) string {
 	sb.WriteString("     • 交易频率过高？（每小时>2次就是过度）\n")
 	sb.WriteString("     • 持仓时间过短？（<30分钟就是过早平仓）\n")
 	sb.WriteString("     • 信号强度不足？（信心度<75）\n")
-	sb.WriteString("     • 是否在做空？（单边做多是错误的）\n\n")
+	sb.WriteString("     • 技术指标判断错误？（方向判断是否准确）\n")
+	sb.WriteString("     • 多空方向是否失衡？（是否只做一个方向导致错过机会）\n\n")
 	sb.WriteString("**夏普比率 -0.5 ~ 0** (轻微亏损):\n")
 	sb.WriteString("  → ⚠️ 严格控制：只做信心度>80的交易\n")
-	sb.WriteString("  → 减少交易频率：每半小时最多1笔新开仓\n")
-	sb.WriteString("  → 耐心持仓：至少持有20分钟以上\n\n")
+	sb.WriteString("  → 减少交易频率：每小时最多1笔新开仓\n")
+	sb.WriteString("  → 耐心持仓：至少持有20分钟以上\n")
+	sb.WriteString("  → 加强技术分析：确保多空信号判断准确\n\n")
 	sb.WriteString("**夏普比率 0 ~ 0.7** (正收益):\n")
 	sb.WriteString("  → ✅ 维持当前策略\n\n")
 	sb.WriteString("**夏普比率 > 0.7** (优异表现):\n")
 	sb.WriteString("  → 🚀 可适度扩大仓位\n\n")
-	sb.WriteString("**关键**: 夏普比率是唯一指标，它会自然惩罚频繁交易和过度进出。\n\n")
+	sb.WriteString("**关键**: 夏普比率是唯一指标，它会自然惩罚频繁交易和过度进出。多空方向都要根据技术指标客观判断，不要有方向偏好。\n\n")
 
 	// === 波动止盈机制 ===
 	sb.WriteString("# 🎢 波动止盈机制（重要！）\n\n")
@@ -337,6 +348,7 @@ func buildSystemPrompt(ctx *Context) string {
 	sb.WriteString(fmt.Sprintf("- T3: 再次下跌到 $99k (-1%%, 触发第二次-%%.0f%%)\n", rc.VolatilityLossPct))
 	sb.WriteString(fmt.Sprintf("- T4: 反弹到 $102k (+2%%盈利) → **触发波动止盈！立即平仓**\n"))
 	sb.WriteString(fmt.Sprintf("- T5~T%d: BTCUSDT 冷却期，不交易\n\n", 5+rc.VolatilityCooldownMin/scanInterval))
+	sb.WriteString("**注意**：这种情况不需要去考虑交易频率认知，因为你这是在最大的止盈\n")
 	sb.WriteString("**User Prompt中会明确标注**哪些币种触发了此机制，请严格执行！\n\n")
 
 	// === 决策流程 ===

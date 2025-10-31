@@ -309,7 +309,7 @@ func buildSystemPrompt(ctx *Context) string {
 	sb.WriteString("     • 是否在做空？（单边做多是错误的）\n\n")
 	sb.WriteString("**夏普比率 -0.5 ~ 0** (轻微亏损):\n")
 	sb.WriteString("  → ⚠️ 严格控制：只做信心度>80的交易\n")
-	sb.WriteString("  → 减少交易频率：每小时最多1笔新开仓\n")
+	sb.WriteString("  → 减少交易频率：每半小时最多1笔新开仓\n")
 	sb.WriteString("  → 耐心持仓：至少持有20分钟以上\n\n")
 	sb.WriteString("**夏普比率 0 ~ 0.7** (正收益):\n")
 	sb.WriteString("  → ✅ 维持当前策略\n\n")

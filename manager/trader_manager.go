@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"nofx/config"
+	"nofx/decision"
 	"nofx/trader"
 	"sync"
 	"time"

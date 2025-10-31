@@ -18,7 +18,7 @@ import type {
 type Page = 'competition' | 'trader';
 
 function App() {
-  const { language, setLanguage } = useLanguage();
+  const { language } = useLanguage();
 
   // 从URL hash读取初始页面状态（支持刷新保持页面）
   const getInitialPage = (): Page => {
@@ -45,11 +45,11 @@ function App() {
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
 
-  // 切换页面时更新URL hash
-  const navigateToPage = (page: Page) => {
-    setCurrentPage(page);
-    window.location.hash = page === 'competition' ? '' : 'trader';
-  };
+  // 切换页面时更新URL hash（预留功能，当前通过 URL hash 自动切换）
+  // const navigateToPage = (page: Page) => {
+  //   setCurrentPage(page);
+  //   window.location.hash = page === 'competition' ? '' : 'trader';
+  // };
 
   // 获取trader列表
   const { data: traders } = useSWR<TraderInfo[]>('traders', api.getTraders, {

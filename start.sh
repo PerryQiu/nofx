@@ -121,15 +121,10 @@ check_config() {
 # }
 
 # ------------------------------------------------------------------------
-# Service Management: Start
+# Service Management: Start (Full Stack)
 # ------------------------------------------------------------------------
 start() {
-    print_info "正在启动 NOFX AI Trading System..."
-
-    # Auto-build frontend if missing or forced
-    # if [ ! -d "web/dist" ] || [ "$1" == "--build" ]; then
-    #     build_frontend
-    # fi
+    print_info "正在启动 NOFX AI Trading System (完整服务)..."
 
     # Rebuild images if flag set
     if [ "$1" == "--build" ]; then
@@ -149,12 +144,76 @@ start() {
 }
 
 # ------------------------------------------------------------------------
-# Service Management: Stop
+# Service Management: Start Backend Only
+# ------------------------------------------------------------------------
+start_backend() {
+    print_info "正在启动后端服务..."
+
+    check_config
+
+    # Rebuild images if flag set
+    if [ "$1" == "--build" ]; then
+        print_info "重新构建后端镜像..."
+        $COMPOSE_CMD -f docker-compose.backend.yml up -d --build
+    else
+        print_info "启动后端容器..."
+        $COMPOSE_CMD -f docker-compose.backend.yml up -d
+    fi
+
+    print_success "后端服务已启动！"
+    print_info "API 端点: http://localhost:8080"
+    print_info ""
+    print_info "查看日志: ./start.sh logs-backend"
+    print_info "停止服务: ./start.sh stop-backend"
+}
+
+# ------------------------------------------------------------------------
+# Service Management: Start Frontend Only
+# ------------------------------------------------------------------------
+start_frontend() {
+    print_info "正在启动前端服务..."
+
+    # Rebuild images if flag set
+    if [ "$1" == "--build" ]; then
+        print_info "重新构建前端镜像..."
+        $COMPOSE_CMD -f docker-compose.frontend.yml up -d --build
+    else
+        print_info "启动前端容器..."
+        $COMPOSE_CMD -f docker-compose.frontend.yml up -d
+    fi
+
+    print_success "前端服务已启动！"
+    print_info "Web 界面: http://localhost:3000"
+    print_info ""
+    print_info "查看日志: ./start.sh logs-frontend"
+    print_info "停止服务: ./start.sh stop-frontend"
+}
+
+# ------------------------------------------------------------------------
+# Service Management: Stop (Full Stack)
 # ------------------------------------------------------------------------
 stop() {
-    print_info "正在停止服务..."
+    print_info "正在停止所有服务..."
     $COMPOSE_CMD stop
     print_success "服务已停止"
+}
+
+# ------------------------------------------------------------------------
+# Service Management: Stop Backend Only
+# ------------------------------------------------------------------------
+stop_backend() {
+    print_info "正在停止后端服务..."
+    $COMPOSE_CMD -f docker-compose.backend.yml stop
+    print_success "后端服务已停止"
+}
+
+# ------------------------------------------------------------------------
+# Service Management: Stop Frontend Only
+# ------------------------------------------------------------------------
+stop_frontend() {
+    print_info "正在停止前端服务..."
+    $COMPOSE_CMD -f docker-compose.frontend.yml stop
+    print_success "前端服务已停止"
 }
 
 # ------------------------------------------------------------------------
@@ -174,6 +233,28 @@ logs() {
         $COMPOSE_CMD logs -f
     else
         $COMPOSE_CMD logs -f "$2"
+    fi
+}
+
+# ------------------------------------------------------------------------
+# Monitoring: Logs Backend
+# ------------------------------------------------------------------------
+logs_backend() {
+    if [ -z "$2" ]; then
+        $COMPOSE_CMD -f docker-compose.backend.yml logs -f
+    else
+        $COMPOSE_CMD -f docker-compose.backend.yml logs -f "$2"
+    fi
+}
+
+# ------------------------------------------------------------------------
+# Monitoring: Logs Frontend
+# ------------------------------------------------------------------------
+logs_frontend() {
+    if [ -z "$2" ]; then
+        $COMPOSE_CMD -f docker-compose.frontend.yml logs -f
+    else
+        $COMPOSE_CMD -f docker-compose.frontend.yml logs -f "$2"
     fi
 }
 
@@ -221,20 +302,34 @@ show_help() {
     echo ""
     echo "用法: ./start.sh [command] [options]"
     echo ""
-    echo "命令:"
-    echo "  start [--build]    启动服务（可选：重新构建）"
-    echo "  stop               停止服务"
-    echo "  restart            重启服务"
-    echo "  logs [service]     查看日志（可选：指定服务名 backend/frontend）"
+    echo "完整服务（默认）:"
+    echo "  start [--build]        启动所有服务（可选：重新构建）"
+    echo "  stop                   停止所有服务"
+    echo "  restart                重启所有服务"
+    echo "  logs [service]         查看日志（可选：指定服务名）"
+    echo ""
+    echo "后端服务:"
+    echo "  start-backend [--build]   启动后端服务（可选：重新构建）"
+    echo "  stop-backend             停止后端服务"
+    echo "  logs-backend             查看后端日志"
+    echo ""
+    echo "前端服务:"
+    echo "  start-frontend [--build]  启动前端服务（可选：重新构建）"
+    echo "  stop-frontend            停止前端服务"
+    echo "  logs-frontend            查看前端日志"
+    echo ""
+    echo "其他命令:"
     echo "  status             查看服务状态"
     echo "  clean              清理所有容器和数据"
     echo "  update             更新代码并重启"
     echo "  help               显示此帮助信息"
     echo ""
     echo "示例:"
-    echo "  ./start.sh start --build    # 构建并启动"
-    echo "  ./start.sh logs backend     # 查看后端日志"
-    echo "  ./start.sh status           # 查看状态"
+    echo "  ./start.sh start --build          # 构建并启动所有服务"
+    echo "  ./start.sh start-backend --build  # 单独构建并启动后端"
+    echo "  ./start.sh start-frontend --build # 单独构建并启动前端"
+    echo "  ./start.sh logs-backend           # 查看后端日志"
+    echo "  ./start.sh status                 # 查看状态"
 }
 
 # ------------------------------------------------------------------------
@@ -249,14 +344,32 @@ main() {
             check_config
             start "$2"
             ;;
+        start-backend)
+            start_backend "$2"
+            ;;
+        start-frontend)
+            start_frontend "$2"
+            ;;
         stop)
             stop
+            ;;
+        stop-backend)
+            stop_backend
+            ;;
+        stop-frontend)
+            stop_frontend
             ;;
         restart)
             restart
             ;;
         logs)
             logs "$@"
+            ;;
+        logs-backend)
+            logs_backend "$@"
+            ;;
+        logs-frontend)
+            logs_frontend "$@"
             ;;
         status)
             status

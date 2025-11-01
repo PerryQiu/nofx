@@ -313,6 +313,7 @@ type SymbolPerformance struct {
 }
 
 // AnalyzePerformance 分析最近N个周期的交易表现
+// 注意：币种统计会统计所有历史交易，而不仅仅是窗口内的交易
 func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAnalysis, error) {
 	records, err := l.GetLatestRecords(lookbackCycles)
 	if err != nil {
@@ -334,46 +335,50 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 	// 追踪持仓状态：symbol_side -> {side, openPrice, openTime, quantity, leverage}
 	openPositions := make(map[string]map[string]interface{})
 
-	// 为了避免开仓记录在窗口外导致匹配失败，需要先从所有历史记录中找出未平仓的持仓
-	// 获取更多历史记录来构建完整的持仓状态（使用更大的窗口）
-	allRecords, err := l.GetLatestRecords(lookbackCycles * 3) // 扩大3倍窗口
-	if err == nil && len(allRecords) > len(records) {
-		// 先从扩大的窗口中收集所有开仓记录
-		for _, record := range allRecords {
-			for _, action := range record.Decisions {
-				if !action.Success {
-					continue
-				}
+	// 为了统计所有历史交易（特别是币种统计），获取所有历史记录
+	// 使用一个很大的数字来获取所有记录（假设不会有超过10000个周期）
+	allRecords, err := l.GetLatestRecords(10000)
+	if err != nil {
+		// 如果获取失败，回退到只使用窗口内的记录
+		allRecords = records
+	}
 
-				symbol := action.Symbol
-				side := ""
-				if action.Action == "open_long" || action.Action == "close_long" {
-					side = "long"
-				} else if action.Action == "open_short" || action.Action == "close_short" {
-					side = "short"
-				}
-				posKey := symbol + "_" + side
+	// 从所有历史记录中收集开仓记录（用于匹配）
+	for _, record := range allRecords {
+		for _, action := range record.Decisions {
+			if !action.Success {
+				continue
+			}
 
-				switch action.Action {
-				case "open_long", "open_short":
-					// 记录开仓
-					openPositions[posKey] = map[string]interface{}{
-						"side":      side,
-						"openPrice": action.Price,
-						"openTime":  action.Timestamp,
-						"quantity":  action.Quantity,
-						"leverage":  action.Leverage,
-					}
-				case "close_long", "close_short":
-					// 移除已平仓记录
-					delete(openPositions, posKey)
+			symbol := action.Symbol
+			side := ""
+			if action.Action == "open_long" || action.Action == "close_long" {
+				side = "long"
+			} else if action.Action == "open_short" || action.Action == "close_short" {
+				side = "short"
+			}
+			posKey := symbol + "_" + side
+
+			switch action.Action {
+			case "open_long", "open_short":
+				// 记录开仓
+				openPositions[posKey] = map[string]interface{}{
+					"side":      side,
+					"openPrice": action.Price,
+					"openTime":  action.Timestamp,
+					"quantity":  action.Quantity,
+					"leverage":  action.Leverage,
 				}
+			case "close_long", "close_short":
+				// 移除已平仓记录
+				delete(openPositions, posKey)
 			}
 		}
 	}
 
-	// 遍历分析窗口内的记录，生成交易结果
-	for _, record := range records {
+	// 遍历所有历史记录生成交易结果（用于币种统计和总体统计）
+	// 但 RecentTrades 会限制只显示最近的交易
+	for _, record := range allRecords {
 		for _, action := range record.Decisions {
 			if !action.Success {
 				continue
@@ -523,12 +528,13 @@ func (l *DecisionLogger) AnalyzePerformance(lookbackCycles int) (*PerformanceAna
 	}
 
 	// 只保留最近的交易（倒序：最新的在前）
-	if len(analysis.RecentTrades) > 10 {
+	const maxRecentTrades = 300 // 最多显示50笔历史订单
+	if len(analysis.RecentTrades) > maxRecentTrades {
 		// 反转数组，让最新的在前
 		for i, j := 0, len(analysis.RecentTrades)-1; i < j; i, j = i+1, j-1 {
 			analysis.RecentTrades[i], analysis.RecentTrades[j] = analysis.RecentTrades[j], analysis.RecentTrades[i]
 		}
-		analysis.RecentTrades = analysis.RecentTrades[:10]
+		analysis.RecentTrades = analysis.RecentTrades[:maxRecentTrades]
 	} else if len(analysis.RecentTrades) > 0 {
 		// 反转数组
 		for i, j := 0, len(analysis.RecentTrades)-1; i < j; i, j = i+1, j-1 {

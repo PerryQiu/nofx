@@ -254,7 +254,13 @@ func buildSystemPrompt(ctx *Context) string {
 	sb.WriteString(fmt.Sprintf("3. **单币仓位**: 山寨%.0f-%.0f U(%dx杠杆) | BTC/ETH %.0f-%.0f U(%dx杠杆)\n",
 		accountEquity*rc.AltcoinPositionSizeMin, accountEquity*rc.AltcoinPositionSizeMax, altcoinLeverage,
 		accountEquity*rc.BTCETHPositionSizeMin, accountEquity*rc.BTCETHPositionSizeMax, btcEthLeverage))
-	sb.WriteString(fmt.Sprintf("4. **保证金**: 总使用率 ≤ %.0f%%\n\n", rc.MaxMarginUsedPct))
+	sb.WriteString(fmt.Sprintf("4. **保证金**: 总使用率 ≤ %.0f%%\n", rc.MaxMarginUsedPct))
+	sb.WriteString("5. **动态止盈止损**: 持仓盈利时，涨幅每达到5%的倍数（5%、10%、15%...），则调整止损价格为当前涨幅-2%\n")
+	sb.WriteString("   - 涨幅5%时，止损价 = 5% - 2% = 3%（锁定3%利润）\n")
+	sb.WriteString("   - 涨幅10%时，止损价 = 10% - 2% = 8%（锁定8%利润）\n")
+	sb.WriteString("   - 涨幅15%时，止损价 = 15% - 2% = 13%（锁定13%利润）\n")
+	sb.WriteString("   - 以此类推：涨幅达到20%→止损价18%，涨幅25%→止损价23%...\n")
+	sb.WriteString("   - **重要**: 一旦持仓达到新的5%倍数阈值，必须立即更新止损价和止盈价格，保护已实现利润\n\n")
 
 	// === 多空策略 ===
 	sb.WriteString("# 📊 做多做空策略（技术指标导向）\n\n")

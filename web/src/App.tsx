@@ -19,25 +19,44 @@ type Page = 'competition' | 'trader';
 
 function App() {
   const { language, setLanguage } = useLanguage();
+  
+  // 语言切换功能（可选）
+  const toggleLanguage = () => {
+    setLanguage(language === 'en' ? 'zh' : 'en');
+  };
 
-  // 从URL hash读取初始页面状态（支持刷新保持页面）
+  // 从URL hash读取初始页面状态和trader_id（支持刷新保持页面）
   const getInitialPage = (): Page => {
     const hash = window.location.hash.slice(1); // 去掉 #
-    return hash === 'trader' || hash === 'details' ? 'trader' : 'competition';
+    return hash.startsWith('trader') || hash === 'details' ? 'trader' : 'competition';
+  };
+
+  const getTraderIdFromHash = (): string | undefined => {
+    const hash = window.location.hash.slice(1);
+    if (hash.startsWith('trader')) {
+      const params = new URLSearchParams(hash.split('?')[1] || '');
+      return params.get('trader_id') || undefined;
+    }
+    return undefined;
   };
 
   const [currentPage, setCurrentPage] = useState<Page>(getInitialPage());
-  const [selectedTraderId, setSelectedTraderId] = useState<string | undefined>();
+  const [selectedTraderId, setSelectedTraderId] = useState<string | undefined>(getTraderIdFromHash());
   const [lastUpdate, setLastUpdate] = useState<string>('--:--:--');
 
-  // 监听URL hash变化，同步页面状态
+  // 监听URL hash变化，同步页面状态和trader_id
   useEffect(() => {
     const handleHashChange = () => {
       const hash = window.location.hash.slice(1);
-      if (hash === 'trader' || hash === 'details') {
+      if (hash.startsWith('trader') || hash === 'details') {
         setCurrentPage('trader');
+        const traderId = getTraderIdFromHash();
+        if (traderId) {
+          setSelectedTraderId(traderId);
+        }
       } else if (hash === 'competition' || hash === '') {
         setCurrentPage('competition');
+        setSelectedTraderId(undefined);
       }
     };
 
@@ -46,9 +65,19 @@ function App() {
   }, []);
 
   // 切换页面时更新URL hash
-  const navigateToPage = (page: Page) => {
+  const navigateToPage = (page: Page, traderId?: string) => {
     setCurrentPage(page);
-    window.location.hash = page === 'competition' ? '' : 'trader';
+    if (page === 'competition') {
+      window.location.hash = '';
+      setSelectedTraderId(undefined);
+    } else {
+      if (traderId) {
+        setSelectedTraderId(traderId);
+        window.location.hash = `trader?trader_id=${traderId}`;
+      } else {
+        window.location.hash = 'trader';
+      }
+    }
   };
 
   // 获取trader列表
@@ -155,7 +184,56 @@ function App() {
               </div>
             </div>
 
-            {/* Right: Controls - Wrap on mobile */}
+            {/* Right: Controls - Navigation Tabs & Language */}
+            <div className="flex items-center gap-2 sm:gap-4">
+              {/* Navigation Tabs */}
+              <div className="flex items-center gap-2 p-1 rounded-lg" style={{ background: '#181A20', border: '1px solid #2B3139' }}>
+                <button
+                  onClick={() => navigateToPage('competition')}
+                  className={`px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
+                    currentPage === 'competition'
+                      ? 'text-white'
+                      : 'text-gray-400 hover:text-gray-300'
+                  }`}
+                  style={
+                    currentPage === 'competition'
+                      ? { background: '#F0B90B', color: '#0B0E11' }
+                      : { background: 'transparent' }
+                  }
+                >
+                  {t('competition', language)}
+                </button>
+                <button
+                  onClick={() => navigateToPage('trader')}
+                  className={`px-3 sm:px-4 py-2 rounded-md text-sm font-medium transition-all duration-200 ${
+                    currentPage === 'trader'
+                      ? 'text-white'
+                      : 'text-gray-400 hover:text-gray-300'
+                  }`}
+                  style={
+                    currentPage === 'trader'
+                      ? { background: '#F0B90B', color: '#0B0E11' }
+                      : { background: 'transparent' }
+                  }
+                >
+                  {t('details', language)}
+                </button>
+              </div>
+              
+              {/* Language Toggle */}
+              <button
+                onClick={toggleLanguage}
+                className="px-3 py-2 rounded-md text-sm font-medium transition-all duration-200 hover:bg-opacity-20"
+                style={{
+                  background: 'rgba(240, 185, 11, 0.1)',
+                  color: '#F0B90B',
+                  border: '1px solid rgba(240, 185, 11, 0.2)'
+                }}
+                title={language === 'en' ? '切换到中文' : 'Switch to English'}
+              >
+                {language === 'en' ? '中文' : 'EN'}
+              </button>
+            </div>
           </div>
         </div>
       </header>

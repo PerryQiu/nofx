@@ -114,7 +114,10 @@ export function CompetitionPage() {
               return (
                 <div
                   key={trader.trader_id}
-                  className="rounded p-3 transition-all duration-300 hover:translate-y-[-1px]"
+                  onClick={() => {
+                    window.location.hash = `trader?trader_id=${trader.trader_id}`;
+                  }}
+                  className="rounded p-3 transition-all duration-300 hover:translate-y-[-1px] cursor-pointer hover:border-opacity-100"
                   style={{
                     background: isLeader ? 'linear-gradient(135deg, rgba(240, 185, 11, 0.08) 0%, #0B0E11 100%)' : '#0B0E11',
                     border: `1px solid ${isLeader ? 'rgba(240, 185, 11, 0.4)' : '#2B3139'}`,

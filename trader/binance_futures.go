@@ -25,6 +25,11 @@ type FuturesTrader struct {
 	positionsCacheTime  time.Time
 	positionsCacheMutex sync.RWMutex
 
+	// 精度缓存（symbol -> SymbolPrecision）
+	precisionCache      map[string]SymbolPrecision
+	precisionCacheTime  time.Time
+	precisionCacheMutex sync.RWMutex
+
 	// 缓存有效期（15秒）
 	cacheDuration time.Duration
 }
@@ -33,8 +38,9 @@ type FuturesTrader struct {
 func NewFuturesTrader(apiKey, secretKey string) *FuturesTrader {
 	client := futures.NewClient(apiKey, secretKey)
 	return &FuturesTrader{
-		client:        client,
-		cacheDuration: 15 * time.Second, // 15秒缓存
+		client:         client,
+		cacheDuration:  15 * time.Second, // 15秒缓存
+		precisionCache: make(map[string]SymbolPrecision),
 	}
 }
 
@@ -462,9 +468,8 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		return err
 	}
 
-	// 格式化止损价格（币安要求精度不超过某个值，使用合理精度）
-	// 根据价格大小自动调整精度：>100用2位小数，>10用3位，>1用4位，其他用5位
-	stopPriceStr := formatPriceWithPrecision(stopPrice)
+	// 格式化止损价格（从币安API获取该symbol的价格精度）
+	stopPriceStr := t.formatPriceWithPrecision(symbol, stopPrice)
 
 	_, err = t.client.NewCreateOrderService().
 		Symbol(symbol).
@@ -504,9 +509,8 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 		return err
 	}
 
-	// 格式化止盈价格（币安要求精度不超过某个值，使用合理精度）
-	// 根据价格大小自动调整精度：>100用2位小数，>10用3位，>1用4位，其他用5位
-	takeProfitPriceStr := formatPriceWithPrecision(takeProfitPrice)
+	// 格式化止盈价格（从币安API获取该symbol的价格精度）
+	takeProfitPriceStr := t.formatPriceWithPrecision(symbol, takeProfitPrice)
 
 	_, err = t.client.NewCreateOrderService().
 		Symbol(symbol).
@@ -527,29 +531,91 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 	return nil
 }
 
-// GetSymbolPrecision 获取交易对的数量精度
-func (t *FuturesTrader) GetSymbolPrecision(symbol string) (int, error) {
-	exchangeInfo, err := t.client.NewExchangeInfoService().Do(context.Background())
-	if err != nil {
-		return 0, fmt.Errorf("获取交易规则失败: %w", err)
+// getSymbolPrecisionFromAPI 从币安API获取交易对的精度信息（带缓存）
+func (t *FuturesTrader) getSymbolPrecisionFromAPI(symbol string) (SymbolPrecision, error) {
+	// 先检查缓存
+	t.precisionCacheMutex.RLock()
+	if prec, exists := t.precisionCache[symbol]; exists && time.Since(t.precisionCacheTime) < 1*time.Hour {
+		// 缓存有效（1小时有效期）
+		t.precisionCacheMutex.RUnlock()
+		return prec, nil
+	}
+	t.precisionCacheMutex.RUnlock()
+
+	// 缓存无效或不存在，从API获取
+	t.precisionCacheMutex.Lock()
+	defer t.precisionCacheMutex.Unlock()
+
+	// 双重检查，可能其他goroutine已经更新了
+	if prec, exists := t.precisionCache[symbol]; exists && time.Since(t.precisionCacheTime) < 1*time.Hour {
+		return prec, nil
 	}
 
+	// 从API获取exchangeInfo
+	exchangeInfo, err := t.client.NewExchangeInfoService().Do(context.Background())
+	if err != nil {
+		return SymbolPrecision{PricePrecision: 4, QuantityPrecision: 3}, fmt.Errorf("获取交易规则失败: %w", err)
+	}
+
+	// 批量更新所有symbol的精度到缓存
+	pricePrecision := 4    // 默认价格精度
+	quantityPrecision := 3 // 默认数量精度
+
 	for _, s := range exchangeInfo.Symbols {
-		if s.Symbol == symbol {
-			// 从LOT_SIZE filter获取精度
-			for _, filter := range s.Filters {
-				if filter["filterType"] == "LOT_SIZE" {
-					stepSize := filter["stepSize"].(string)
-					precision := calculatePrecision(stepSize)
-					log.Printf("  %s 数量精度: %d (stepSize: %s)", symbol, precision, stepSize)
-					return precision, nil
+		var symbolPricePrec, symbolQuantityPrec int
+
+		// 从PRICE_FILTER获取价格精度
+		for _, filter := range s.Filters {
+			if filter["filterType"] == "PRICE_FILTER" {
+				if tickSize, ok := filter["tickSize"].(string); ok {
+					symbolPricePrec = calculatePrecision(tickSize)
+				}
+			}
+			// 从LOT_SIZE filter获取数量精度
+			if filter["filterType"] == "LOT_SIZE" {
+				if stepSize, ok := filter["stepSize"].(string); ok {
+					symbolQuantityPrec = calculatePrecision(stepSize)
 				}
 			}
 		}
+
+		// 如果精度为0，使用默认值
+		if symbolPricePrec == 0 {
+			symbolPricePrec = 4
+		}
+		if symbolQuantityPrec == 0 {
+			symbolQuantityPrec = 3
+		}
+
+		// 存入缓存
+		t.precisionCache[s.Symbol] = SymbolPrecision{
+			PricePrecision:    symbolPricePrec,
+			QuantityPrecision: symbolQuantityPrec,
+		}
+
+		// 如果是要查询的symbol，保存精度
+		if s.Symbol == symbol {
+			pricePrecision = symbolPricePrec
+			quantityPrecision = symbolQuantityPrec
+		}
 	}
 
-	log.Printf("  ⚠ %s 未找到精度信息，使用默认精度3", symbol)
-	return 3, nil // 默认精度为3
+	t.precisionCacheTime = time.Now()
+	log.Printf("  ✓ %s 精度已缓存: 价格精度=%d, 数量精度=%d", symbol, pricePrecision, quantityPrecision)
+
+	return SymbolPrecision{
+		PricePrecision:    pricePrecision,
+		QuantityPrecision: quantityPrecision,
+	}, nil
+}
+
+// GetSymbolPrecision 获取交易对的数量精度（向后兼容）
+func (t *FuturesTrader) GetSymbolPrecision(symbol string) (int, error) {
+	prec, err := t.getSymbolPrecisionFromAPI(symbol)
+	if err != nil {
+		return 3, err
+	}
+	return prec.QuantityPrecision, nil
 }
 
 // calculatePrecision 从stepSize计算精度
@@ -595,18 +661,26 @@ func trimTrailingZeros(s string) string {
 	return s
 }
 
-// formatPriceWithPrecision 根据价格大小自动选择合理精度
-// 币安要求价格精度不超过定义的最大值
-func formatPriceWithPrecision(price float64) string {
-	if price >= 100 {
-		return fmt.Sprintf("%.2f", price) // 大于等于100，使用2位小数
-	} else if price >= 10 {
-		return fmt.Sprintf("%.3f", price) // 大于等于10，使用3位小数
-	} else if price >= 1 {
-		return fmt.Sprintf("%.4f", price) // 大于等于1，使用4位小数
-	} else {
-		return fmt.Sprintf("%.5f", price) // 小于1，使用5位小数
+// formatPriceWithPrecision 根据symbol的精度要求格式化价格
+// 币安要求价格精度不超过定义的最大值，从exchangeInfo获取
+func (t *FuturesTrader) formatPriceWithPrecision(symbol string, price float64) string {
+	prec, err := t.getSymbolPrecisionFromAPI(symbol)
+	if err != nil {
+		// 如果获取失败，使用默认精度（根据价格大小）
+		if price >= 100 {
+			return fmt.Sprintf("%.2f", price)
+		} else if price >= 10 {
+			return fmt.Sprintf("%.3f", price)
+		} else if price >= 1 {
+			return fmt.Sprintf("%.4f", price)
+		} else {
+			return fmt.Sprintf("%.5f", price)
+		}
 	}
+
+	// 使用从API获取的价格精度
+	format := fmt.Sprintf("%%.%df", prec.PricePrecision)
+	return fmt.Sprintf(format, price)
 }
 
 // FormatQuantity 格式化数量到正确的精度

@@ -743,6 +743,7 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 	// 查找对应币种的持仓
 	var positionSide string
 	var quantity float64
+	var entryPrice float64
 	found := false
 	for _, pos := range positions {
 		if pos["symbol"] == decision.Symbol {
@@ -753,6 +754,9 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 			positionSide = strings.ToUpper(side)
 			if qty, ok := pos["quantity"].(float64); ok {
 				quantity = qty
+			}
+			if ep, ok := pos["entryPrice"].(float64); ok {
+				entryPrice = ep
 			}
 			found = true
 			break
@@ -770,16 +774,26 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 	}
 	actionRecord.Price = marketData.CurrentPrice
 
-	// 验证止损价格的合理性
+	// 验证止损价格的合理性（基于开仓价和当前价）
 	if positionSide == "LONG" {
-		// 做多时，止损价应该低于当前价格
+		// 做多时：
+		// 1. 止损价应该高于开仓价（锁定利润，动态止损）
+		// 2. 止损价应该低于当前价格（避免无效止损）
+		if entryPrice > 0 && decision.StopLoss < entryPrice {
+			return fmt.Errorf("做多时，止损价(%.4f)应该高于开仓价(%.4f)以锁定利润（动态止损规则）", decision.StopLoss, entryPrice)
+		}
 		if decision.StopLoss >= marketData.CurrentPrice {
-			return fmt.Errorf("做多时，止损价(%.4f)必须低于当前价格(%.4f)", decision.StopLoss, marketData.CurrentPrice)
+			return fmt.Errorf("做多时，止损价(%.4f)必须低于当前价格(%.4f)，否则止损单无效", decision.StopLoss, marketData.CurrentPrice)
 		}
 	} else if positionSide == "SHORT" {
-		// 做空时，止损价应该高于当前价格
+		// 做空时：
+		// 1. 止损价应该低于开仓价（锁定利润，动态止损）
+		// 2. 止损价应该高于当前价格（避免无效止损）
+		if entryPrice > 0 && decision.StopLoss > entryPrice {
+			return fmt.Errorf("做空时，止损价(%.4f)应该低于开仓价(%.4f)以锁定利润（动态止损规则）", decision.StopLoss, entryPrice)
+		}
 		if decision.StopLoss <= marketData.CurrentPrice {
-			return fmt.Errorf("做空时，止损价(%.4f)必须高于当前价格(%.4f)", decision.StopLoss, marketData.CurrentPrice)
+			return fmt.Errorf("做空时，止损价(%.4f)必须高于当前价格(%.4f)，否则止损单无效", decision.StopLoss, marketData.CurrentPrice)
 		}
 	}
 

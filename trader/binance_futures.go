@@ -462,12 +462,16 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		return err
 	}
 
+	// 格式化止损价格（币安要求精度不超过某个值，使用合理精度）
+	// 根据价格大小自动调整精度：>100用2位小数，>10用3位，>1用4位，其他用5位
+	stopPriceStr := formatPriceWithPrecision(stopPrice)
+
 	_, err = t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(side).
 		PositionSide(posSide).
 		Type(futures.OrderTypeStopMarket).
-		StopPrice(fmt.Sprintf("%.8f", stopPrice)).
+		StopPrice(stopPriceStr).
 		Quantity(quantityStr).
 		WorkingType(futures.WorkingTypeContractPrice).
 		ClosePosition(true).
@@ -500,12 +504,16 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 		return err
 	}
 
+	// 格式化止盈价格（币安要求精度不超过某个值，使用合理精度）
+	// 根据价格大小自动调整精度：>100用2位小数，>10用3位，>1用4位，其他用5位
+	takeProfitPriceStr := formatPriceWithPrecision(takeProfitPrice)
+
 	_, err = t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(side).
 		PositionSide(posSide).
 		Type(futures.OrderTypeTakeProfitMarket).
-		StopPrice(fmt.Sprintf("%.8f", takeProfitPrice)).
+		StopPrice(takeProfitPriceStr).
 		Quantity(quantityStr).
 		WorkingType(futures.WorkingTypeContractPrice).
 		ClosePosition(true).
@@ -585,6 +593,20 @@ func trimTrailingZeros(s string) string {
 	}
 
 	return s
+}
+
+// formatPriceWithPrecision 根据价格大小自动选择合理精度
+// 币安要求价格精度不超过定义的最大值
+func formatPriceWithPrecision(price float64) string {
+	if price >= 100 {
+		return fmt.Sprintf("%.2f", price) // 大于等于100，使用2位小数
+	} else if price >= 10 {
+		return fmt.Sprintf("%.3f", price) // 大于等于10，使用3位小数
+	} else if price >= 1 {
+		return fmt.Sprintf("%.4f", price) // 大于等于1，使用4位小数
+	} else {
+		return fmt.Sprintf("%.5f", price) // 小于1，使用5位小数
+	}
 }
 
 // FormatQuantity 格式化数量到正确的精度

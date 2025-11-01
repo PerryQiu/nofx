@@ -88,7 +88,7 @@ type Context struct {
 // Decision AI的交易决策
 type Decision struct {
 	Symbol          string  `json:"symbol"`
-	Action          string  `json:"action"` // "open_long", "open_short", "close_long", "close_short", "hold", "wait"
+	Action          string  `json:"action"` // "open_long", "open_short", "close_long", "close_short", "update_stop_loss", "update_take_profit", "hold", "wait"
 	Leverage        int     `json:"leverage,omitempty"`
 	PositionSizeUSD float64 `json:"position_size_usd,omitempty"`
 	StopLoss        float64 `json:"stop_loss,omitempty"`
@@ -255,12 +255,20 @@ func buildSystemPrompt(ctx *Context) string {
 		accountEquity*rc.AltcoinPositionSizeMin, accountEquity*rc.AltcoinPositionSizeMax, altcoinLeverage,
 		accountEquity*rc.BTCETHPositionSizeMin, accountEquity*rc.BTCETHPositionSizeMax, btcEthLeverage))
 	sb.WriteString(fmt.Sprintf("4. **保证金**: 总使用率 ≤ %.0f%%\n", rc.MaxMarginUsedPct))
-	sb.WriteString("5. **动态止盈止损**: 持仓盈利时，涨幅每达到5%的倍数（5%、10%、15%...），则调整止损价格为当前涨幅-2%\n")
+	sb.WriteString("5. **动态止盈止损**: 持仓盈利时，盈利每达到5%的倍数（5%、10%、15%...），则调整止损价格为当前涨幅-2%\n")
 	sb.WriteString("   - 涨幅5%时，止损价 = 5% - 2% = 3%（锁定3%利润）\n")
 	sb.WriteString("   - 涨幅10%时，止损价 = 10% - 2% = 8%（锁定8%利润）\n")
 	sb.WriteString("   - 涨幅15%时，止损价 = 15% - 2% = 13%（锁定13%利润）\n")
 	sb.WriteString("   - 以此类推：涨幅达到20%→止损价18%，涨幅25%→止损价23%...\n")
-	sb.WriteString("   - **重要**: 一旦持仓达到新的5%倍数阈值，必须立即更新止损价和止盈价格，保护已实现利润\n\n")
+	sb.WriteString("   - **重要**: 一旦持仓达到新的5%倍数阈值，必须立即更新止损价和止盈价格，保护已实现利润\n")
+	sb.WriteString("   - **计算示例**：ZEC开仓价$400，当前价$421.72（涨幅5.43%），需要设置止损3%%保护利润：\n")
+	sb.WriteString("     止损价格 = 421.72 * (1 - 0.03) = 409.07，使用 `update_stop_loss` action 填 `stop_loss: 409.07`\n\n")
+	sb.WriteString("**如何更新止损止盈**：\n")
+	sb.WriteString("- 使用 `update_stop_loss` action：{\"symbol\": \"ZECUSDT\", \"action\": \"update_stop_loss\", \"stop_loss\": 新止损价, \"reasoning\": \"保护利润\"}\n")
+	sb.WriteString("- 使用 `update_take_profit` action：{\"symbol\": \"ZECUSDT\", \"action\": \"update_take_profit\", \"take_profit\": 新止盈价, \"reasoning\": \"扩大收益\"}\n")
+	sb.WriteString("- **注意**：`stop_loss` 和 `take_profit` 必须是**价格**（USDT），需要根据当前价格计算\n")
+	sb.WriteString("  例如：ZEC当前价$421.72，要设置止损价3%%（盈利保护），应计算：421.72 * (1 - 0.03) = 409.07，填 `stop_loss: 409.07`\n")
+	sb.WriteString("- 只能在已有持仓时使用，系统会自动检测持仓方向和当前价格\n\n")
 
 	// === 多空策略 ===
 	sb.WriteString("# 📊 做多做空策略（技术指标导向）\n\n")
@@ -371,12 +379,17 @@ func buildSystemPrompt(ctx *Context) string {
 	sb.WriteString("**第二步: JSON决策数组**\n\n")
 	sb.WriteString("```json\n[\n")
 	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 300, \"reasoning\": \"下跌趋势+MACD死叉\"},\n", btcEthLeverage, accountEquity*5))
-	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"close_long\", \"reasoning\": \"止盈离场\"}\n")
+	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"close_long\", \"reasoning\": \"止盈离场\"},\n")
+	sb.WriteString("  {\"symbol\": \"ZECUSDT\", \"action\": \"update_stop_loss\", \"stop_loss\": 400, \"reasoning\": \"盈利+6%%，动态止损保护利润\"}\n")
 	sb.WriteString("]\n```\n\n")
 	sb.WriteString("**字段说明**:\n")
-	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | hold | wait\n")
+	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | update_stop_loss | update_take_profit | hold | wait\n")
 	sb.WriteString("- `confidence`: 0-100（开仓建议≥75）\n")
-	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n\n")
+	sb.WriteString("- 开仓时必填: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd, reasoning\n")
+	sb.WriteString("- 更新止损时必填: symbol, stop_loss, reasoning（必须已有持仓）\n")
+	sb.WriteString("- 更新止盈时必填: symbol, take_profit, reasoning（必须已有持仓）\n")
+	sb.WriteString("- **重要**：`stop_loss` 和 `take_profit` 必须是**价格**（USDT），不是百分比！\n")
+	sb.WriteString("  例如：BTC当前价$95000，止损3%%应填 `stop_loss: 95000 * 0.97 = 92150`，止盈5%%应填 `take_profit: 95000 * 1.05 = 99750`\n\n")
 
 	// === 关键提醒 ===
 	sb.WriteString("---\n\n")
@@ -613,12 +626,14 @@ func validateDecision(d *Decision, ctx *Context) error {
 
 	// 验证action
 	validActions := map[string]bool{
-		"open_long":   true,
-		"open_short":  true,
-		"close_long":  true,
-		"close_short": true,
-		"hold":        true,
-		"wait":        true,
+		"open_long":          true,
+		"open_short":         true,
+		"close_long":         true,
+		"close_short":        true,
+		"update_stop_loss":   true,
+		"update_take_profit": true,
+		"hold":               true,
+		"wait":               true,
 	}
 
 	if !validActions[d.Action] {
@@ -696,6 +711,28 @@ func validateDecision(d *Decision, ctx *Context) error {
 			return fmt.Errorf("风险回报比过低(%.2f:1)，必须≥%.1f:1 [风险:%.2f%% 收益:%.2f%%] [止损:%.2f 止盈:%.2f]",
 				riskRewardRatio, rc.MinRiskRewardRatio, riskPercent, rewardPercent, d.StopLoss, d.TakeProfit)
 		}
+	}
+
+	// 更新止损操作验证
+	if d.Action == "update_stop_loss" {
+		if d.StopLoss <= 0 {
+			return fmt.Errorf("更新止损时，止损价格必须大于0: %.2f", d.StopLoss)
+		}
+		if d.Symbol == "" {
+			return fmt.Errorf("更新止损时，必须指定币种")
+		}
+		// 检查是否有对应持仓（需要在执行时检查，这里只验证基本参数）
+	}
+
+	// 更新止盈操作验证
+	if d.Action == "update_take_profit" {
+		if d.TakeProfit <= 0 {
+			return fmt.Errorf("更新止盈时，止盈价格必须大于0: %.2f", d.TakeProfit)
+		}
+		if d.Symbol == "" {
+			return fmt.Errorf("更新止盈时，必须指定币种")
+		}
+		// 检查是否有对应持仓（需要在执行时检查，这里只验证基本参数）
 	}
 
 	return nil

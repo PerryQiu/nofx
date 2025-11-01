@@ -560,6 +560,10 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *decision.Decision, act
 		return at.executeCloseLongWithRecord(decision, actionRecord)
 	case "close_short":
 		return at.executeCloseShortWithRecord(decision, actionRecord)
+	case "update_stop_loss":
+		return at.executeUpdateStopLossWithRecord(decision, actionRecord)
+	case "update_take_profit":
+		return at.executeUpdateTakeProfitWithRecord(decision, actionRecord)
 	case "hold", "wait":
 		// 无需执行，仅记录
 		return nil
@@ -723,6 +727,130 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 	}
 
 	log.Printf("  ✓ 平仓成功")
+	return nil
+}
+
+// executeUpdateStopLossWithRecord 执行更新止损并记录详细信息
+func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
+	log.Printf("  🔧 更新止损: %s -> %.4f", decision.Symbol, decision.StopLoss)
+
+	// 获取持仓信息
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return fmt.Errorf("获取持仓信息失败: %w", err)
+	}
+
+	// 查找对应币种的持仓
+	var positionSide string
+	var quantity float64
+	found := false
+	for _, pos := range positions {
+		if pos["symbol"] == decision.Symbol {
+			side, ok := pos["side"].(string)
+			if !ok {
+				continue
+			}
+			positionSide = strings.ToUpper(side)
+			if qty, ok := pos["quantity"].(float64); ok {
+				quantity = qty
+			}
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("❌ %s 没有持仓，无法更新止损", decision.Symbol)
+	}
+
+	// 获取当前价格
+	marketData, err := market.Get(decision.Symbol)
+	if err != nil {
+		return err
+	}
+	actionRecord.Price = marketData.CurrentPrice
+
+	// 验证止损价格的合理性
+	if positionSide == "LONG" {
+		// 做多时，止损价应该低于当前价格
+		if decision.StopLoss >= marketData.CurrentPrice {
+			return fmt.Errorf("做多时，止损价(%.4f)必须低于当前价格(%.4f)", decision.StopLoss, marketData.CurrentPrice)
+		}
+	} else if positionSide == "SHORT" {
+		// 做空时，止损价应该高于当前价格
+		if decision.StopLoss <= marketData.CurrentPrice {
+			return fmt.Errorf("做空时，止损价(%.4f)必须高于当前价格(%.4f)", decision.StopLoss, marketData.CurrentPrice)
+		}
+	}
+
+	// 设置止损
+	if err := at.trader.SetStopLoss(decision.Symbol, positionSide, quantity, decision.StopLoss); err != nil {
+		return fmt.Errorf("设置止损失败: %w", err)
+	}
+
+	log.Printf("  ✓ 止损更新成功: %s %s 止损价=%.4f", decision.Symbol, positionSide, decision.StopLoss)
+	return nil
+}
+
+// executeUpdateTakeProfitWithRecord 执行更新止盈并记录详细信息
+func (at *AutoTrader) executeUpdateTakeProfitWithRecord(decision *decision.Decision, actionRecord *logger.DecisionAction) error {
+	log.Printf("  🔧 更新止盈: %s -> %.4f", decision.Symbol, decision.TakeProfit)
+
+	// 获取持仓信息
+	positions, err := at.trader.GetPositions()
+	if err != nil {
+		return fmt.Errorf("获取持仓信息失败: %w", err)
+	}
+
+	// 查找对应币种的持仓
+	var positionSide string
+	var quantity float64
+	found := false
+	for _, pos := range positions {
+		if pos["symbol"] == decision.Symbol {
+			side, ok := pos["side"].(string)
+			if !ok {
+				continue
+			}
+			positionSide = strings.ToUpper(side)
+			if qty, ok := pos["quantity"].(float64); ok {
+				quantity = qty
+			}
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("❌ %s 没有持仓，无法更新止盈", decision.Symbol)
+	}
+
+	// 获取当前价格
+	marketData, err := market.Get(decision.Symbol)
+	if err != nil {
+		return err
+	}
+	actionRecord.Price = marketData.CurrentPrice
+
+	// 验证止盈价格的合理性
+	if positionSide == "LONG" {
+		// 做多时，止盈价应该高于当前价格
+		if decision.TakeProfit <= marketData.CurrentPrice {
+			return fmt.Errorf("做多时，止盈价(%.4f)必须高于当前价格(%.4f)", decision.TakeProfit, marketData.CurrentPrice)
+		}
+	} else if positionSide == "SHORT" {
+		// 做空时，止盈价应该低于当前价格
+		if decision.TakeProfit >= marketData.CurrentPrice {
+			return fmt.Errorf("做空时，止盈价(%.4f)必须低于当前价格(%.4f)", decision.TakeProfit, marketData.CurrentPrice)
+		}
+	}
+
+	// 设置止盈
+	if err := at.trader.SetTakeProfit(decision.Symbol, positionSide, quantity, decision.TakeProfit); err != nil {
+		return fmt.Errorf("设置止盈失败: %w", err)
+	}
+
+	log.Printf("  ✓ 止盈更新成功: %s %s 止盈价=%.4f", decision.Symbol, positionSide, decision.TakeProfit)
 	return nil
 }
 

@@ -338,10 +338,10 @@ func (at *AutoTrader) runCycle() error {
 	}
 	log.Println()
 
-	// 7. 对决策排序：确保先平仓后开仓（防止仓位叠加超限）
+	// 7. 对决策排序：确保先平仓→更新止损止盈→后开仓（防止仓位叠加超限）
 	sortedDecisions := sortDecisionsByPriority(decision.Decisions)
 
-	log.Println("🔄 执行顺序（已优化）: 先平仓→后开仓")
+	log.Println("🔄 执行顺序（已优化）: 先平仓→更新止损止盈→后开仓")
 	for i, d := range sortedDecisions {
 		log.Printf("  [%d] %s %s", i+1, d.Symbol, d.Action)
 	}
@@ -783,7 +783,15 @@ func (at *AutoTrader) executeUpdateStopLossWithRecord(decision *decision.Decisio
 		}
 	}
 
-	// 设置止损
+	// 先取消该币种的所有挂单（包括旧的止损止盈订单）
+	// 注意：如果同时更新止损和止盈，这个取消操作只需执行一次即可
+	// 但由于是分别执行两个action，这里每个都会取消，第二次取消不会有影响
+	if err := at.trader.CancelAllOrders(decision.Symbol); err != nil {
+		log.Printf("  ⚠ 取消旧挂单失败（继续更新止损）: %v", err)
+		// 不返回错误，继续执行，因为可能没有旧订单
+	}
+
+	// 设置新的止损
 	if err := at.trader.SetStopLoss(decision.Symbol, positionSide, quantity, decision.StopLoss); err != nil {
 		return fmt.Errorf("设置止损失败: %w", err)
 	}
@@ -845,7 +853,13 @@ func (at *AutoTrader) executeUpdateTakeProfitWithRecord(decision *decision.Decis
 		}
 	}
 
-	// 设置止盈
+	// 先取消该币种的所有挂单（包括旧的止损止盈订单）
+	if err := at.trader.CancelAllOrders(decision.Symbol); err != nil {
+		log.Printf("  ⚠ 取消旧挂单失败（继续更新止盈）: %v", err)
+		// 不返回错误，继续执行，因为可能没有旧订单
+	}
+
+	// 设置新的止盈
 	if err := at.trader.SetTakeProfit(decision.Symbol, positionSide, quantity, decision.TakeProfit); err != nil {
 		return fmt.Errorf("设置止盈失败: %w", err)
 	}
@@ -1032,8 +1046,8 @@ func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 	return result, nil
 }
 
-// sortDecisionsByPriority 对决策排序：先平仓，再开仓，最后hold/wait
-// 这样可以避免换仓时仓位叠加超限
+// sortDecisionsByPriority 对决策排序：先平仓→更新止损止盈→再开仓→最后hold/wait
+// 这样可以避免换仓时仓位叠加超限，并确保止损止盈更新在持仓仍然存在时执行
 func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision {
 	if len(decisions) <= 1 {
 		return decisions
@@ -1044,10 +1058,12 @@ func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision 
 		switch action {
 		case "close_long", "close_short":
 			return 1 // 最高优先级：先平仓
+		case "update_stop_loss", "update_take_profit":
+			return 2 // 次高优先级：更新止损止盈（需要持仓存在）
 		case "open_long", "open_short":
-			return 2 // 次优先级：后开仓
+			return 3 // 中等优先级：后开仓
 		case "hold", "wait":
-			return 3 // 最低优先级：观望
+			return 4 // 最低优先级：观望
 		default:
 			return 999 // 未知动作放最后
 		}

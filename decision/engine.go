@@ -402,9 +402,9 @@ func buildSystemPrompt(ctx *Context) string {
 	sb.WriteString("---\n\n")
 	sb.WriteString("**记住**: \n")
 	sb.WriteString("- 目标是夏普比率，不是交易频率\n")
-	sb.WriteString("- 做空 = 做多，都是赚钱工具\n")
+	sb.WriteString("- 做空 和 做多，都是赚钱工具\n")
 	sb.WriteString("- 宁可错过，不做低质量交易\n")
-	sb.WriteString("- 风险回报比1:3是底线\n")
+	sb.WriteString("- 连续两次亏损的symbol一小时内不再交易他\n")
 
 	return sb.String()
 }
